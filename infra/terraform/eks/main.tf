@@ -222,3 +222,141 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
   role       = aws_iam_role.ecs_task_execution.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
+
+# =============================================================================
+# Aurora PostgreSQL Database
+# =============================================================================
+
+# DB Subnet Group
+resource "aws_db_subnet_group" "aurora" {
+  name       = "${var.cluster_name}-aurora-subnet-group"
+  subnet_ids = module.vpc.private_subnets
+
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-aurora-subnet-group"
+  })
+}
+
+# Security Group for Aurora
+resource "aws_security_group" "aurora" {
+  name        = "${var.cluster_name}-aurora-sg"
+  description = "Security group for Aurora PostgreSQL"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [module.eks.cluster_security_group_id]
+    description     = "PostgreSQL from EKS cluster"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound"
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-aurora-sg"
+  })
+}
+
+# Random password for Aurora
+resource "random_password" "aurora_master_password" {
+  length  = 16
+  special = true
+}
+
+# Aurora Cluster
+resource "aws_rds_cluster" "aurora" {
+  cluster_identifier      = "${var.cluster_name}-aurora"
+  engine                  = "aurora-postgresql"
+  engine_mode             = "provisioned"
+  engine_version          = var.aurora_engine_version
+  database_name           = var.database_name
+  master_username         = var.database_master_username
+  master_password         = random_password.aurora_master_password.result
+  db_subnet_group_name    = aws_db_subnet_group.aurora.name
+  vpc_security_group_ids  = [aws_security_group.aurora.id]
+  backup_retention_period = var.aurora_backup_retention_period
+  preferred_backup_window = "03:00-04:00"
+  skip_final_snapshot     = var.environment != "production"
+  final_snapshot_identifier = var.environment == "production" ? "${var.cluster_name}-aurora-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}" : null
+
+  serverlessv2_scaling_configuration {
+    max_capacity = var.aurora_max_capacity
+    min_capacity = var.aurora_min_capacity
+  }
+
+  enabled_cloudwatch_logs_exports = ["postgresql"]
+
+  tags = var.tags
+}
+
+# Aurora Cluster Instances
+resource "aws_rds_cluster_instance" "aurora" {
+  count              = var.aurora_instance_count
+  identifier         = "${var.cluster_name}-aurora-${count.index}"
+  cluster_identifier = aws_rds_cluster.aurora.id
+  instance_class     = "db.serverless"
+  engine             = aws_rds_cluster.aurora.engine
+  engine_version     = aws_rds_cluster.aurora.engine_version
+
+  tags = var.tags
+}
+
+# Store DB credentials in Secrets Manager
+resource "aws_secretsmanager_secret" "aurora_credentials" {
+  name                    = "${var.cluster_name}/aurora/credentials"
+  description             = "Aurora PostgreSQL credentials"
+  recovery_window_in_days = var.environment == "production" ? 30 : 0
+
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "aurora_credentials" {
+  secret_id = aws_secretsmanager_secret.aurora_credentials.id
+  secret_string = jsonencode({
+    username            = var.database_master_username
+    password            = random_password.aurora_master_password.result
+    engine              = "postgres"
+    host                = aws_rds_cluster.aurora.endpoint
+    port                = 5432
+    dbname              = var.database_name
+    dbClusterIdentifier = aws_rds_cluster.aurora.cluster_identifier
+    DATABASE_URL        = "postgresql://${var.database_master_username}:${random_password.aurora_master_password.result}@${aws_rds_cluster.aurora.endpoint}:5432/${var.database_name}"
+  })
+}
+
+# IAM Policy for Secrets Manager access
+resource "aws_iam_policy" "secrets_manager_read" {
+  name        = "${var.cluster_name}-secrets-manager-read"
+  description = "Allow reading secrets from Secrets Manager"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = aws_secretsmanager_secret.aurora_credentials.arn
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+# CloudWatch Log Group for Aurora
+resource "aws_cloudwatch_log_group" "aurora" {
+  name              = "/aws/rds/cluster/${var.cluster_name}-aurora/postgresql"
+  retention_in_days = 7
+
+  tags = var.tags
+}

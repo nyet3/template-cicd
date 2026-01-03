@@ -2,33 +2,59 @@
 
 GitHub Actions CI/CD を使用するために、以下のシークレットを設定してください。
 
-## 必須シークレット
+## 必須シークレット (Multi-Region Production)
 
-### コンテナレジストリ
+### AWS 認証情報
 
-1. `REGISTRY_URL`
-   - コンテナレジストリのURL
-   - 例: `ghcr.io/your-org` または `your-account.dkr.ecr.us-east-1.amazonaws.com`
+1. `AWS_ACCESS_KEY_ID`
 
-2. `REGISTRY_USERNAME`
-   - レジストリへの認証ユーザー名
-   - GitHub Container Registry の場合: GitHubユーザー名
-   - AWS ECR の場合: AWS Access Key ID
+   - AWS アクセスキー ID
+   - IAM ユーザーまたはロールのアクセスキー
+   - 必要な権限: ECR, EKS, RDS, Route53, Secrets Manager
 
-3. `REGISTRY_PASSWORD`
-   - レジストリへの認証パスワード/トークン
-   - GitHub Container Registry の場合: Personal Access Token (packages:write権限)
-   - AWS ECR の場合: AWS Secret Access Key
+2. `AWS_SECRET_ACCESS_KEY`
+   - AWS シークレットアクセスキー
+   - 上記アクセスキー ID に対応するシークレットキー
 
-### Kubernetes 設定
+### 必要な IAM ポリシー
 
-4. `KUBECONFIG_STAGING`
-   - ステージング環境の kubeconfig ファイル内容
-   - Base64エンコードせず、そのまま設定
+CI/CD ユーザーには以下の権限が必要です：
 
-5. `KUBECONFIG_PRODUCTION`
-   - 本番環境の kubeconfig ファイル内容
-   - Base64エンコードせず、そのまま設定
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "eks:DescribeCluster",
+        "eks:ListClusters",
+        "eks:UpdateClusterConfig"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["sts:GetCallerIdentity"],
+      "Resource": "*"
+    }
+  ]
+}
+```
 
 ## シークレットの設定方法
 
@@ -40,13 +66,66 @@ GitHub Actions CI/CD を使用するために、以下のシークレットを�
 4. Name と Secret を入力
 5. "Add secret" をクリック
 
-### 環境別シークレット（オプション）
+### 設定例
 
-より細かい制御が必要な場合、環境別にシークレットを設定できます:
+```bash
+# AWS認証情報を確認
+aws sts get-caller-identity
+
+# GitHub CLIで設定 (オプション)
+gh secret set AWS_ACCESS_KEY_ID -b "YOUR_ACCESS_KEY_ID"
+gh secret set AWS_SECRET_ACCESS_KEY -b "YOUR_SECRET_ACCESS_KEY"
+```
+
+## 環境別シークレット（Production Environment）
+
+本番環境への自動デプロイには承認フローを追加できます:
 
 1. Settings → Environments
-2. "New environment" で `staging` と `production` を作成
-3. 各環境にシークレットを設定
+2. "New environment" で `production` を作成
+3. "Required reviewers" を設定（承認者を指定）
+4. "Deployment branches" でブランチを制限（例: main のみ）
+
+## ローカル開発用のシークレット (オプション)
+
+### コンテナレジストリ (Staging)
+
+以下はステージング環境用のオプション設定です：
+
+1. `REGISTRY_URL`
+
+   - コンテナレジストリの URL
+   - 例: `ghcr.io/your-org`
+
+2. `REGISTRY_USERNAME`
+
+   - レジストリへの認証ユーザー名
+   - GitHub Container Registry の場合: GitHub ユーザー名
+
+3. `REGISTRY_PASSWORD`
+   - レジストリへの認証パスワード/トークン
+   - GitHub Container Registry の場合: Personal Access Token (packages:write 権限)
+
+### Kubernetes 設定 (Staging)
+
+4. `KUBECONFIG_STAGING`
+   - ステージング環境の kubeconfig ファイル内容
+   - Base64 エンコードせず、そのまま設定
+
+## Multi-Region Deployment
+
+### リージョン設定
+
+デフォルトのリージョン設定：
+
+- **Primary**: `ap-northeast-1` (東京)
+- **Secondary**: `ap-northeast-3` (大阪)
+
+リージョンを変更する場合は、以下のファイルを編集：
+
+- `.github/workflows/deploy-multi-region.yml`
+- `Makefile`
+- `infra/terraform/multi-region/variables.tf`
 
 ## kubeconfig の取得方法
 

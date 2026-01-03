@@ -84,3 +84,46 @@ variable "tags" {
     ManagedBy = "Terraform"
   }
 }
+
+# Aurora Database Variables
+variable "database_name" {
+  description = "Database name"
+  type        = string
+  default     = "templatecicd"
+}
+
+variable "database_master_username" {
+  description = "Master username for the database"
+  type        = string
+  default     = "dbadmin"
+}
+
+variable "aurora_engine_version" {
+  description = "Aurora PostgreSQL engine version"
+  type        = string
+  default     = "15.4"
+}
+
+variable "aurora_instance_count" {
+  description = "Number of Aurora instances"
+  type        = number
+  default     = 2
+}
+
+variable "aurora_min_capacity" {
+  description = "Minimum Aurora Serverless v2 capacity (ACUs)"
+  type        = number
+  default     = 0.5
+}
+
+variable "aurora_max_capacity" {
+  description = "Maximum Aurora Serverless v2 capacity (ACUs)"
+  type        = number
+  default     = 2
+}
+
+variable "aurora_backup_retention_period" {
+  description = "Backup retention period in days"
+  type        = number
+  default     = 7
+}

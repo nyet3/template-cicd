@@ -1,16 +1,26 @@
-.PHONY: help dev test build clean docker-build docker-test k8s-deploy k8s-clean k8s-port-forward k8s-stop-port-forward k8s-status k8s-create-secrets certs certs-k8s certs-docker certs-clean keycloak-setup keycloak-setup-docker keycloak-setup-k8s keycloak-logs keycloak-reset keycloak-client-update aws-login aws-ecr-push aws-eks-deploy aws-eks-status aws-eks-clean aws-ecs-deploy aws-ecs-status aws-ecs-clean prod-deploy prod-status prod-clean
+.PHONY: help dev test build clean docker-build docker-test k8s-deploy k8s-clean k8s-port-forward k8s-stop-port-forward k8s-status k8s-create-secrets certs certs-k8s certs-docker certs-clean keycloak-setup keycloak-setup-docker keycloak-setup-k8s keycloak-logs keycloak-reset keycloak-client-update aws-login aws-ecr-push aws-eks-deploy aws-eks-status aws-eks-clean aws-ecs-deploy aws-ecs-status aws-ecs-clean prod-deploy prod-status prod-clean multi-region-init multi-region-plan multi-region-apply multi-region-status multi-region-destroy
 
 # AWS Configuration
-AWS_REGION ?= ap-northeast-1
+AWS_REGION_PRIMARY ?= ap-northeast-1
+AWS_REGION_SECONDARY ?= ap-northeast-3
 AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text 2>/dev/null)
-ECR_REGISTRY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+ECR_REGISTRY_PRIMARY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION_PRIMARY).amazonaws.com
+ECR_REGISTRY_SECONDARY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION_SECONDARY).amazonaws.com
 ECR_REPO_BACKEND ?= template-cicd/backend
 ECR_REPO_FRONTEND ?= template-cicd/frontend
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
 
+# Legacy single-region support
+AWS_REGION ?= $(AWS_REGION_PRIMARY)
+ECR_REGISTRY ?= $(ECR_REGISTRY_PRIMARY)
+
 # EKS Configuration
-EKS_CLUSTER_NAME ?= template-cicd-cluster
+EKS_CLUSTER_NAME_PRIMARY ?= template-cicd-cluster-apne1
+EKS_CLUSTER_NAME_SECONDARY ?= template-cicd-cluster-oska
 EKS_NAMESPACE ?= template-cicd
+
+# Legacy single-region support
+EKS_CLUSTER_NAME ?= $(EKS_CLUSTER_NAME_PRIMARY)
 
 # ECS Configuration
 ECS_CLUSTER_NAME ?= template-cicd-cluster
@@ -21,6 +31,9 @@ ECS_TASK_FAMILY_FRONTEND ?= template-cicd-frontend
 
 # Deployment target (eks or ecs)
 DEPLOY_TARGET ?= eks
+
+# Multi-region Terraform directory
+TERRAFORM_DIR ?= infra/terraform/multi-region
 
 help:
 	@echo "Available targets:"
@@ -54,10 +67,18 @@ help:
 	@echo "  prod-status            - Show production deployment status"
 	@echo "  prod-clean             - Clean up production resources"
 	@echo ""
+	@echo "Multi-Region Disaster Recovery:"
+	@echo "  multi-region-init      - Initialize Terraform for multi-region deployment"
+	@echo "  multi-region-plan      - Plan multi-region infrastructure changes"
+	@echo "  multi-region-apply     - Apply multi-region infrastructure"
+	@echo "  multi-region-status    - Show status of both regions"
+	@echo "  multi-region-destroy   - Destroy multi-region infrastructure"
+	@echo ""
 	@echo "Environment Variables:"
-	@echo "  AWS_REGION=$(AWS_REGION)"
+	@echo "  AWS_REGION_PRIMARY=$(AWS_REGION_PRIMARY)"
+	@echo "  AWS_REGION_SECONDARY=$(AWS_REGION_SECONDARY)"
 	@echo "  AWS_ACCOUNT_ID=$(AWS_ACCOUNT_ID)"
-	@echo "  ECR_REGISTRY=$(ECR_REGISTRY)"
+	@echo "  ECR_REGISTRY_PRIMARY=$(ECR_REGISTRY_PRIMARY)"
 	@echo "  IMAGE_TAG=$(IMAGE_TAG)"
 	@echo "  DEPLOY_TARGET=$(DEPLOY_TARGET)"
 	@echo ""
@@ -654,3 +675,111 @@ prod-clean:
 		echo "❌ Invalid DEPLOY_TARGET: $(DEPLOY_TARGET)"; \
 		exit 1; \
 	fi
+
+# Multi-Region Disaster Recovery Commands
+multi-region-init:
+	@echo "🌍 Initializing Terraform for multi-region deployment..."
+	@cd $(TERRAFORM_DIR) && terraform init
+	@echo "✅ Terraform initialized successfully"
+
+multi-region-plan:
+	@echo "🌍 Planning multi-region infrastructure changes..."
+	@cd $(TERRAFORM_DIR) && terraform plan
+	@echo "✅ Terraform plan completed"
+
+multi-region-apply:
+	@echo "🌍 Applying multi-region infrastructure..."
+	@echo "⚠️  This will deploy to both $(AWS_REGION_PRIMARY) and $(AWS_REGION_SECONDARY)"
+	@read -p "Are you sure? Type 'yes' to confirm: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		cd $(TERRAFORM_DIR) && terraform apply -auto-approve; \
+		echo "✅ Multi-region infrastructure deployed successfully"; \
+	else \
+		echo "❌ Deployment cancelled"; \
+	fi
+
+multi-region-status:
+	@echo "🌍 Multi-Region Status"
+	@echo "=============================================="
+	@echo ""
+	@echo "📍 Primary Region: $(AWS_REGION_PRIMARY)"
+	@echo "--------------------------------------------"
+	@echo "EKS Clusters:"
+	@aws eks describe-cluster --region $(AWS_REGION_PRIMARY) --name $(EKS_CLUSTER_NAME_PRIMARY) \
+		--query 'cluster.[name,status,endpoint]' --output table 2>/dev/null || echo "No cluster found"
+	@echo ""
+	@echo "Load Balancers:"
+	@aws elbv2 describe-load-balancers --region $(AWS_REGION_PRIMARY) \
+		--query 'LoadBalancers[?contains(LoadBalancerName, `template-cicd`)].{Name:LoadBalancerName,DNS:DNSName,State:State.Code}' \
+		--output table 2>/dev/null || echo "No load balancers found"
+	@echo ""
+	@echo "Aurora Clusters:"
+	@aws rds describe-db-clusters --region $(AWS_REGION_PRIMARY) \
+		--query 'DBClusters[?contains(DBClusterIdentifier, `template-cicd`)].{Identifier:DBClusterIdentifier,Status:Status,Endpoint:Endpoint}' \
+		--output table 2>/dev/null || echo "No Aurora clusters found"
+	@echo ""
+	@echo "=============================================="
+	@echo "📍 Secondary Region: $(AWS_REGION_SECONDARY)"
+	@echo "--------------------------------------------"
+	@echo "EKS Clusters:"
+	@aws eks describe-cluster --region $(AWS_REGION_SECONDARY) --name $(EKS_CLUSTER_NAME_SECONDARY) \
+		--query 'cluster.[name,status,endpoint]' --output table 2>/dev/null || echo "No cluster found"
+	@echo ""
+	@echo "Load Balancers:"
+	@aws elbv2 describe-load-balancers --region $(AWS_REGION_SECONDARY) \
+		--query 'LoadBalancers[?contains(LoadBalancerName, `template-cicd`)].{Name:LoadBalancerName,DNS:DNSName,State:State.Code}' \
+		--output table 2>/dev/null || echo "No load balancers found"
+	@echo ""
+	@echo "Aurora Clusters:"
+	@aws rds describe-db-clusters --region $(AWS_REGION_SECONDARY) \
+		--query 'DBClusters[?contains(DBClusterIdentifier, `template-cicd`)].{Identifier:DBClusterIdentifier,Status:Status,Endpoint:Endpoint}' \
+		--output table 2>/dev/null || echo "No Aurora clusters found"
+	@echo ""
+	@echo "=============================================="
+	@echo "🏥 Route53 Health Checks:"
+	@aws route53 list-health-checks \
+		--query 'HealthChecks[?contains(to_string(Tags), `template-cicd`)].{ID:Id,Domain:HealthCheckConfig.FullyQualifiedDomainName,Status:HealthCheckConfig.Type}' \
+		--output table 2>/dev/null || echo "No health checks found"
+
+multi-region-destroy:
+	@echo "🌍 Destroying multi-region infrastructure..."
+	@echo "⚠️  WARNING: This will destroy ALL resources in both regions!"
+	@echo "   Primary:   $(AWS_REGION_PRIMARY)"
+	@echo "   Secondary: $(AWS_REGION_SECONDARY)"
+	@read -p "Type 'destroy-all' to confirm: " confirm; \
+	if [ "$$confirm" = "destroy-all" ]; then \
+		cd $(TERRAFORM_DIR) && terraform destroy -auto-approve; \
+		echo "✅ Multi-region infrastructure destroyed"; \
+	else \
+		echo "❌ Destroy cancelled"; \
+	fi
+
+# Deploy application to both regions
+multi-region-deploy-app:
+	@echo "🌍 Deploying application to both regions..."
+	@echo ""
+	@echo "📍 Deploying to Primary Region ($(AWS_REGION_PRIMARY))..."
+	@aws eks update-kubeconfig --region $(AWS_REGION_PRIMARY) --name $(EKS_CLUSTER_NAME_PRIMARY)
+	@kubectl apply -f infra/kubernetes/namespace.yaml
+	@kubectl apply -f infra/kubernetes/configmap.yaml
+	@kubectl apply -f infra/kubernetes/secrets.yaml
+	@kubectl apply -f infra/kubernetes/backend.yaml
+	@kubectl apply -f infra/kubernetes/frontend.yaml
+	@kubectl apply -f infra/kubernetes/keycloak.yaml
+	@kubectl rollout status deployment/backend -n $(EKS_NAMESPACE) --timeout=5m
+	@kubectl rollout status deployment/frontend -n $(EKS_NAMESPACE) --timeout=5m
+	@echo "✅ Primary region deployment completed"
+	@echo ""
+	@echo "📍 Deploying to Secondary Region ($(AWS_REGION_SECONDARY))..."
+	@aws eks update-kubeconfig --region $(AWS_REGION_SECONDARY) --name $(EKS_CLUSTER_NAME_SECONDARY)
+	@kubectl apply -f infra/kubernetes/namespace.yaml
+	@kubectl apply -f infra/kubernetes/configmap.yaml
+	@kubectl apply -f infra/kubernetes/secrets.yaml
+	@kubectl apply -f infra/kubernetes/backend.yaml
+	@kubectl apply -f infra/kubernetes/frontend.yaml
+	@kubectl apply -f infra/kubernetes/keycloak.yaml
+	@kubectl rollout status deployment/backend -n $(EKS_NAMESPACE) --timeout=5m
+	@kubectl rollout status deployment/frontend -n $(EKS_NAMESPACE) --timeout=5m
+	@echo "✅ Secondary region deployment completed"
+	@echo ""
+	@echo "✅ Application deployed to both regions successfully!"

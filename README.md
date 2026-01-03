@@ -104,13 +104,22 @@ make k8s-deploy
 
 ### 本番環境 (AWS)
 
+#### 環境構成
+
+- **開発環境**: ローカル（cargo run / npm run dev）
+- **ステージング環境**: Docker Compose または Minikube
+- **本番環境**: AWS (EKS または ECS Fargate) - Single Region
+- **災対環境**: AWS Multi-Region (Primary: Tokyo / Secondary: Osaka)
+
 #### 前提条件
 
-- AWS CLI設定済み
-- Terraform 1.0+（インフラ構築用）
-- kubectl（EKS使用時）
+- AWS CLI 設定済み
+- Terraform 1.6+（インフラ構築用）
+- kubectl（EKS 使用時）
 
-#### EKSへのデプロイ
+#### Single Region デプロイ
+
+##### EKS へのデプロイ
 
 ```bash
 # 1. インフラをTerraformで構築
@@ -126,7 +135,7 @@ make prod-deploy DEPLOY_TARGET=eks
 make prod-status DEPLOY_TARGET=eks
 ```
 
-#### ECS Fargateへのデプロイ
+##### ECS Fargate へのデプロイ
 
 ```bash
 # 1. インフラをTerraformで構築
@@ -142,12 +151,57 @@ make prod-deploy DEPLOY_TARGET=ecs
 make prod-status DEPLOY_TARGET=ecs
 ```
 
-#### AWS環境変数
+#### Multi-Region Disaster Recovery デプロイ
+
+災害対策用のマルチリージョン構成を自動的にデプロイします。
 
 ```bash
+# 1. 両リージョンのインフラを構築
+make multi-region-init    # Terraform初期化
+make multi-region-plan    # 変更プレビュー
+make multi-region-apply   # 適用（Primary + Secondary同時）
+
+# 2. アプリケーションを両リージョンにデプロイ
+make multi-region-deploy-app
+
+# 3. ステータス確認
+make multi-region-status
+```
+
+マルチリージョン構成の詳細は [infra/terraform/multi-region/README.md](infra/terraform/multi-region/README.md) を参照。
+
+##### マルチリージョンの特徴
+
+- **Aurora Global Database**: Primary→Secondary への自動レプリケーション（RPO < 1 秒）
+- **ECR Replication**: コンテナイメージの自動複製
+- **Route 53 Failover**: Primary 障害時の自動 DNS 切り替え（RTO < 2 分）
+- **ヘルスチェック**: 30 秒間隔での死活監視
+
+#### GitHub Actions 自動デプロイ
+
+```bash
+# GitHub Secretsを設定（必須）
+# Settings → Secrets → Actions
+# - AWS_ACCESS_KEY_ID
+# - AWS_SECRET_ACCESS_KEY
+
+# mainブランチへのプッシュで自動デプロイ
+git push origin main
+```
+
+詳細は [GITHUB_SECRETS.md](GITHUB_SECRETS.md) を参照。
+
+#### AWS 環境変数
+
+```bash
+# Single Region
 export AWS_REGION=ap-northeast-1
 export DEPLOY_TARGET=eks  # または ecs
 export IMAGE_TAG=v1.0.0   # 省略時はgit commit hash
+
+# Multi-Region
+export AWS_REGION_PRIMARY=ap-northeast-1
+export AWS_REGION_SECONDARY=ap-northeast-3
 ```
 
 詳細は [infra/terraform/README.md](infra/terraform/README.md) を参照。
@@ -158,10 +212,13 @@ export IMAGE_TAG=v1.0.0   # 省略時はgit commit hash
 # Minikube
 make k8s-clean
 
-# AWS
+# AWS Single Region
 make prod-clean DEPLOY_TARGET=eks
 # または
 make prod-clean DEPLOY_TARGET=ecs
+
+# AWS Multi-Region (全削除)
+make multi-region-destroy
 ```
 
 ## 環境変数
@@ -210,27 +267,95 @@ VITE_OIDC_CLIENT_ID=frontend-client
 
 ## CI/CD
 
-GitHub Actions が以下を自動実行:
+### GitHub Actions
+
+main ブランチへのプッシュで自動実行:
 
 1. **Pull Request**: テスト実行、Lint チェック
-2. **main ブランチマージ**: ビルド、テスト、ステージング環境へデプロイ
-3. **タグプッシュ**: 本番環境へデプロイ
+2. **main ブランチマージ**: ビルド、テスト、ステージング環境へデプロイ（オプション）
+3. **Multi-Region Production**: 両リージョンへの同時デプロイ
 
-詳細は `.github/workflows/` を参照。
+#### Multi-Region CI/CD フロー
+
+```mermaid
+graph LR
+    A[Push to main] --> B[Run Tests]
+    B --> C[Build Images]
+    C --> D[Push to ECR Primary]
+    D --> E[ECR Replication]
+    E --> F[Terraform Apply]
+    F --> G[Deploy to Primary]
+    F --> H[Deploy to Secondary]
+    G --> I[Health Check]
+    H --> I
+    I --> J[Route53 Update]
+```
+
+詳細は `.github/workflows/deploy-multi-region.yml` を参照。
+
+### ローカルでの CI/CD テスト
+
+```bash
+# Act を使ってローカルでGitHub Actionsをテスト
+act -j test
+```
 
 ## ディレクトリ構造
 
 ```
 template-cicd/
-├── backend/           # Rustバックエンド
-├── frontend/          # Reactフロントエンド
-├── infra/             # インフラ設定
-│   ├── docker/        # Dockerfile群
-│   ├── kubernetes/    # K8sマニフェスト
-│   └── keycloak/      # Keycloak設定
-├── .github/workflows/ # CI/CD定義
-└── .vscode/           # VS Code設定
+├── backend/                  # Rustバックエンド
+├── frontend/                 # Reactフロントエンド
+├── infra/                    # インフラ設定
+│   ├── docker/               # Dockerfile群
+│   ├── kubernetes/           # K8sマニフェスト
+│   ├── keycloak/             # Keycloak設定
+│   └── terraform/            # Infrastructure as Code
+│       ├── eks/              # EKS Single Region
+│       ├── ecs/              # ECS Single Region
+│       ├── multi-region/     # Multi-Region DR
+│       └── modules/          # 共通Terraformモジュール
+├── .github/
+│   └── workflows/            # CI/CD定義
+│       └── deploy-multi-region.yml  # マルチリージョンデプロイ
+└── .vscode/                  # VS Code設定
 ```
+
+## アーキテクチャ
+
+### Multi-Region Disaster Recovery
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Route 53 (Failover)                     │
+│                    Health Check: Primary                     │
+└───────────────────┬─────────────────┬───────────────────────┘
+                    │                 │
+        ┌───────────▼──────┐  ┌──────▼───────────┐
+        │  Primary Region  │  │ Secondary Region │
+        │  ap-northeast-1  │  │  ap-northeast-3  │
+        ├──────────────────┤  ├──────────────────┤
+        │ EKS Cluster      │  │ EKS Cluster      │
+        │ - Backend Pods   │  │ - Backend Pods   │
+        │ - Frontend Pods  │  │ - Frontend Pods  │
+        │ ALB (HTTPS)      │  │ ALB (HTTPS)      │
+        │                  │  │                  │
+        │ Aurora Primary   │◄─┤ Aurora Secondary │
+        │ (Read/Write)     │  │ (Read-Only)      │
+        └──────────────────┘  └──────────────────┘
+                │                       ▲
+                └───── Global DB ───────┘
+                    (< 1 sec RPO)
+```
+
+### コスト最適化
+
+| 環境               | 月額コスト (USD)        |
+| ------------------ | ----------------------- |
+| 開発環境           | $0 (ローカル)           |
+| ステージング       | $0-50 (Docker/Minikube) |
+| 本番 Single Region | $150-200                |
+| 本番 Multi-Region  | $396-481                |
 
 ## ライセンス
 

@@ -48,3 +48,35 @@ output "configure_kubectl" {
   description = "Command to configure kubectl"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
 }
+
+output "aurora_cluster_endpoint" {
+  description = "Aurora cluster writer endpoint"
+  value       = aws_rds_cluster.aurora.endpoint
+}
+
+output "aurora_cluster_reader_endpoint" {
+  description = "Aurora cluster reader endpoint"
+  value       = aws_rds_cluster.aurora.reader_endpoint
+}
+
+output "aurora_database_name" {
+  description = "Aurora database name"
+  value       = aws_rds_cluster.aurora.database_name
+}
+
+output "aurora_master_username" {
+  description = "Aurora master username"
+  value       = aws_rds_cluster.aurora.master_username
+  sensitive   = true
+}
+
+output "aurora_secret_arn" {
+  description = "ARN of the Secrets Manager secret containing Aurora credentials"
+  value       = aws_secretsmanager_secret.aurora_credentials.arn
+}
+
+output "database_url" {
+  description = "Database connection URL"
+  value       = "postgresql://${var.database_master_username}:${random_password.aurora_master_password.result}@${aws_rds_cluster.aurora.endpoint}:5432/${var.database_name}"
+  sensitive   = true
+}
