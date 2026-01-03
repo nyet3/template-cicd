@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: template-cicd
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      volumes:
+        - name: frontend-tls
+          secret:
+            secretName: frontend-tls
+      containers:
+        - name: frontend
+          image: frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+            - containerPort: 443
+              name: https
+          volumeMounts:
+            - name: frontend-tls
+              mountPath: /etc/nginx/certs
+              readOnly: true
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: VITE_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: frontend-secrets
+                  key: VITE_API_URL
+            - name: VITE_AUTH_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: frontend-config
+                  key: VITE_AUTH_ENABLED
+            - name: VITE_OIDC_AUTHORITY
+              valueFrom:
+                secretKeyRef:
+                  name: frontend-secrets
+                  key: VITE_OIDC_AUTHORITY
+            - name: VITE_OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: frontend-secrets
+                  key: VITE_OIDC_CLIENT_ID
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: template-cicd
+spec:
+  selector:
+    app: frontend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+      name: http
+    - protocol: TCP
+      port: 443
+      targetPort: 443
+      name: https
+  type: ClusterIP

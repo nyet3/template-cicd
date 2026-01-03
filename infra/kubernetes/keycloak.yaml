@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: template-cicd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      volumes:
+        - name: keycloak-tls
+          secret:
+            secretName: keycloak-tls
+        - name: realm-config
+          configMap:
+            name: keycloak-realm
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.0
+          args:
+            - "start"
+            - "--import-realm"
+            - "--https-certificate-file=/etc/keycloak-tls/tls.crt"
+            - "--https-certificate-key-file=/etc/keycloak-tls/tls.key"
+          env:
+            - name: KEYCLOAK_ADMIN
+              value: "admin"
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              value: "admin"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_PROXY
+              value: "edge"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HTTPS_PORT
+              value: "8443"
+          volumeMounts:
+            - name: keycloak-tls
+              mountPath: /etc/keycloak-tls
+              readOnly: true
+            - name: realm-config
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8443
+              name: https
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: template-cicd
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      name: http
+    - protocol: TCP
+      port: 8443
+      targetPort: 8443
+      name: https
+  type: ClusterIP

@@ -1,0 +1,110 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: template-cicd-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-appdb}
+      POSTGRES_USER: ${POSTGRES_USER:-appuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-appsecret}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-appuser} -d ${POSTGRES_DB:-appdb}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/docker/postgres-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    networks:
+      - appnet
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: template-cicd-keycloak
+    entrypoint: ["/opt/keycloak/bin/idp-entrypoint.sh"]
+    command:
+      [
+        "start-dev",
+        "--import-realm",
+        "--https-port=8443",
+        "--https-key-store-file=/opt/keycloak/conf/server.keystore",
+        "--https-key-store-password=changeit",
+      ]
+    env_file:
+      - ${KEYCLOAK_ENV_FILE:-./env/test/keycloak.env}
+      - ${IDP_ENV_FILE:-./env/test/idp.env}
+    environment:
+      KC_HOSTNAME_STRICT: "false"
+      KEYCLOAK_KEYSTORE_PASSWORD: "changeit"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c '</dev/tcp/localhost/8443' && echo 'OK' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - ./infra/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - ./infra/keycloak/idp-entrypoint.sh:/opt/keycloak/bin/idp-entrypoint.sh:ro
+      - ./infra/keycloak/setup-realm.sh:/opt/keycloak/bin/setup-realm.sh:ro
+      - keycloak-keystore:/opt/keycloak/conf
+    ports:
+      - "${KEYCLOAK_PORT:-8443}:8443"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - appnet
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../infra/docker/backend.Dockerfile
+    env_file:
+      - ${BACKEND_ENV_FILE:-./env/test/backend.env}
+    environment:
+      RUST_LOG: debug
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    networks:
+      - appnet
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../infra/docker/frontend.Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-true}
+        VITE_OIDC_AUTHORITY: ${VITE_OIDC_AUTHORITY:-https://localhost:3000/realms/testrealm}
+        VITE_OIDC_CLIENT_ID: ${VITE_OIDC_CLIENT_ID:-frontend-client}
+        VITE_OIDC_REDIRECT_URI: ${VITE_OIDC_REDIRECT_URI:-https://localhost:3000/callback}
+    env_file:
+      - ${FRONTEND_ENV_FILE:-./env/test/frontend.env}
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-test}
+    depends_on:
+      - backend
+      - keycloak
+    ports:
+      - "${FRONTEND_PORT:-3000}:443"
+    networks:
+      - appnet
+
+volumes:
+  postgres-data:
+  keycloak-keystore:
+
+networks:
+  appnet:
+    driver: bridge

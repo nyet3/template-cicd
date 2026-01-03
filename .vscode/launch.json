@@ -1,0 +1,48 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Backend (LLDB)",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin=backend",
+          "--package=backend",
+          "--manifest-path=${workspaceFolder}/backend/Cargo.toml"
+        ],
+        "filter": {
+          "name": "backend",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}/backend",
+      "env": {
+        "DATABASE_URL": "sqlite://./dev.db",
+        "ENVIRONMENT": "development",
+        "SERVER_HOST": "0.0.0.0",
+        "SERVER_PORT": "8080",
+        "RUST_LOG": "info"
+      }
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Debug Frontend (Chrome)",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/frontend/src",
+      "sourceMaps": true,
+      "preLaunchTask": "Start Frontend Dev Server"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack Debug (F5)",
+      "configurations": ["Debug Backend (LLDB)", "Debug Frontend (Chrome)"],
+      "preLaunchTask": "Start Frontend Dev Server",
+      "stopAll": true
+    }
+  ]
+}

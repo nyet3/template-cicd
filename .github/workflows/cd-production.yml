@@ -1,0 +1,96 @@
+name: CD - Deploy to Production
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Extract tag name
+        id: extract_tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./infra/docker/backend.Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_URL }}/backend:${{ steps.extract_tag.outputs.TAG }}
+            ${{ secrets.REGISTRY_URL }}/backend:stable
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./infra/docker/frontend.Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_URL }}/frontend:${{ steps.extract_tag.outputs.TAG }}
+            ${{ secrets.REGISTRY_URL }}/frontend:stable
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Extract tag name
+        id: extract_tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBECONFIG_PRODUCTION }}" > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Deploy to Kubernetes
+        run: |
+          export REGISTRY=${{ secrets.REGISTRY_URL }}
+          export TAG=${{ steps.extract_tag.outputs.TAG }}
+          
+          # Replace placeholders in YAML files
+          sed -i "s|\${REGISTRY}|$REGISTRY|g" infra/kubernetes/*.yaml
+          sed -i "s|\${TAG}|$TAG|g" infra/kubernetes/*.yaml
+          
+          kubectl apply -f infra/kubernetes/namespace.yaml
+          kubectl apply -f infra/kubernetes/configmap.yaml
+          kubectl apply -f infra/kubernetes/secrets.yaml
+          kubectl apply -f infra/kubernetes/backend.yaml
+          kubectl apply -f infra/kubernetes/frontend.yaml
+          kubectl apply -f infra/kubernetes/ingress.yaml
+          
+          kubectl rollout status deployment/backend -n template-cicd
+          kubectl rollout status deployment/frontend -n template-cicd
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n template-cicd
+          kubectl get services -n template-cicd
+          kubectl get ingress -n template-cicd
