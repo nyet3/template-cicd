@@ -80,6 +80,18 @@ make ci-frontend  # フロントエンドのみ (lint + test + build)
 
 全てのチェックが通れば CI/CD も成功します。
 
+#### ブランチ保護の設定
+
+main ブランチへの CI チェック失敗時の push をリジェクトするには、GitHub でブランチ保護ルールを設定します：
+
+```bash
+# GitHub CLIを使用して自動設定
+./scripts/setup-branch-protection.sh
+```
+
+または、GitHub Web UI で手動設定することもできます。  
+詳細は [ブランチ保護ルール設定ガイド](docs/BRANCH_PROTECTION.md) を参照してください。
+
 #### 手動起動
 
 ```bash
