@@ -66,23 +66,15 @@ cd frontend
 npm run dev
 ```
 
-### テスト環境
+### ステージング環境
+
+#### Docker Compose
 
 ```bash
 docker-compose -f docker-compose.test.yml up --build
 ```
 
-### 本番環境 (Kubernetes)
-
-#### 必要な環境
-
-- Minikube または Kubernetes クラスター
-- kubectl
-- Docker (Minikube 使用時)
-
-#### 簡単デプロイ
-
-Minikube を起動してデプロイするだけ：
+#### Minikube / Kubernetes
 
 ```bash
 minikube start
@@ -110,32 +102,66 @@ make k8s-deploy
 
 ⚠️ ブラウザで自己署名証明書の警告が表示されますが、問題ありません。
 
-#### 手動デプロイ
+### 本番環境 (AWS)
 
-証明書生成とデプロイを個別に実行する場合：
+#### 前提条件
+
+- AWS CLI設定済み
+- Terraform 1.0+（インフラ構築用）
+- kubectl（EKS使用時）
+
+#### EKSへのデプロイ
 
 ```bash
-# TLS証明書の生成
-infra/kubernetes/generate-k8s-certs.sh
-kubectl create secret tls frontend-tls --cert=infra/kubernetes/k8s-certs/frontend.crt --key=infra/kubernetes/k8s-certs/frontend.key -n template-cicd
-kubectl create secret tls keycloak-tls --cert=infra/kubernetes/k8s-certs/keycloak.crt --key=infra/kubernetes/k8s-certs/keycloak.key -n template-cicd
+# 1. インフラをTerraformで構築
+cd infra/terraform/eks
+terraform init
+terraform apply
 
-# Minikube環境でイメージビルド
-eval $(minikube docker-env)
-docker build -t backend:latest -f infra/docker/backend.Dockerfile backend/
-docker build -t frontend:latest -f infra/docker/frontend.Dockerfile frontend/
+# 2. アプリケーションをデプロイ
+cd ../../..
+make prod-deploy DEPLOY_TARGET=eks
 
-# Kubernetesにデプロイ
-kubectl apply -f infra/kubernetes/
-
-# Port-forward開始
-make k8s-port-forward
+# ステータス確認
+make prod-status DEPLOY_TARGET=eks
 ```
+
+#### ECS Fargateへのデプロイ
+
+```bash
+# 1. インフラをTerraformで構築
+cd infra/terraform/ecs
+terraform init
+terraform apply
+
+# 2. アプリケーションをデプロイ
+cd ../../..
+make prod-deploy DEPLOY_TARGET=ecs
+
+# ステータス確認
+make prod-status DEPLOY_TARGET=ecs
+```
+
+#### AWS環境変数
+
+```bash
+export AWS_REGION=ap-northeast-1
+export DEPLOY_TARGET=eks  # または ecs
+export IMAGE_TAG=v1.0.0   # 省略時はgit commit hash
+```
+
+詳細は [infra/terraform/README.md](infra/terraform/README.md) を参照。
 
 #### クリーンアップ
 
 ```bash
+# Minikube
 make k8s-clean
+
+# AWS
+make prod-clean DEPLOY_TARGET=eks
+# または
+make prod-clean DEPLOY_TARGET=ecs
 ```
 
 ## 環境変数
@@ -149,7 +175,7 @@ DATABASE_URL=sqlite://./dev.db
 ENVIRONMENT=development
 ```
 
-テスト環境:
+ステージング環境:
 
 ```env
 DATABASE_URL=postgresql://user:password@postgres:5432/testdb
@@ -158,7 +184,7 @@ OIDC_ISSUER_URL=http://keycloak:8080/realms/myrealm
 OIDC_CLIENT_ID=backend-client
 ```
 
-本番環境 (Kubernetes Secret):
+本番環境 (AWS Secrets Manager):
 
 - DATABASE_URL: AWS RDS 接続文字列
 - OIDC_ISSUER_URL: Keycloak URL

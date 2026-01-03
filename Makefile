@@ -1,4 +1,26 @@
-.PHONY: help dev test build clean docker-build docker-test k8s-deploy k8s-clean k8s-port-forward k8s-stop-port-forward k8s-status k8s-create-secrets certs certs-k8s certs-docker certs-clean keycloak-setup keycloak-setup-docker keycloak-setup-k8s keycloak-logs keycloak-reset keycloak-client-update
+.PHONY: help dev test build clean docker-build docker-test k8s-deploy k8s-clean k8s-port-forward k8s-stop-port-forward k8s-status k8s-create-secrets certs certs-k8s certs-docker certs-clean keycloak-setup keycloak-setup-docker keycloak-setup-k8s keycloak-logs keycloak-reset keycloak-client-update aws-login aws-ecr-push aws-eks-deploy aws-eks-status aws-eks-clean aws-ecs-deploy aws-ecs-status aws-ecs-clean prod-deploy prod-status prod-clean
+
+# AWS Configuration
+AWS_REGION ?= ap-northeast-1
+AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text 2>/dev/null)
+ECR_REGISTRY ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+ECR_REPO_BACKEND ?= template-cicd/backend
+ECR_REPO_FRONTEND ?= template-cicd/frontend
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
+
+# EKS Configuration
+EKS_CLUSTER_NAME ?= template-cicd-cluster
+EKS_NAMESPACE ?= template-cicd
+
+# ECS Configuration
+ECS_CLUSTER_NAME ?= template-cicd-cluster
+ECS_SERVICE_BACKEND ?= template-cicd-backend
+ECS_SERVICE_FRONTEND ?= template-cicd-frontend
+ECS_TASK_FAMILY_BACKEND ?= template-cicd-backend
+ECS_TASK_FAMILY_FRONTEND ?= template-cicd-frontend
+
+# Deployment target (eks or ecs)
+DEPLOY_TARGET ?= eks
 
 help:
 	@echo "Available targets:"
@@ -7,17 +29,37 @@ help:
 	@echo "  build                  - Build all components"
 	@echo "  clean                  - Clean build artifacts"
 	@echo ""
-	@echo "Docker Compose:"
+	@echo "Docker Compose (Staging):"
 	@echo "  docker-build           - Build Docker images"
 	@echo "  docker-test            - Run tests in Docker"
 	@echo ""
-	@echo "Kubernetes:"
+	@echo "Minikube/K8s (Staging):"
 	@echo "  k8s-deploy             - Complete K8s deployment (images, certs, deploy, port-forward)"
 	@echo "  k8s-clean              - Clean up all K8s resources"
 	@echo "  k8s-port-forward       - Start port forwarding for K8s services"
 	@echo "  k8s-stop-port-forward  - Stop all port forwarding"
 	@echo "  k8s-status             - Show status of all K8s resources"
 	@echo "  k8s-create-secrets     - Create TLS secrets from existing certificates"
+	@echo ""
+	@echo "AWS Production:"
+	@echo "  aws-login              - Login to AWS ECR"
+	@echo "  aws-ecr-push           - Build and push images to ECR"
+	@echo "  aws-eks-deploy         - Deploy to EKS cluster"
+	@echo "  aws-eks-status         - Show EKS deployment status"
+	@echo "  aws-eks-clean          - Clean up EKS resources"
+	@echo "  aws-ecs-deploy         - Deploy to ECS Fargate"
+	@echo "  aws-ecs-status         - Show ECS deployment status"
+	@echo "  aws-ecs-clean          - Clean up ECS resources"
+	@echo "  prod-deploy            - Deploy to production (DEPLOY_TARGET=eks|ecs)"
+	@echo "  prod-status            - Show production deployment status"
+	@echo "  prod-clean             - Clean up production resources"
+	@echo ""
+	@echo "Environment Variables:"
+	@echo "  AWS_REGION=$(AWS_REGION)"
+	@echo "  AWS_ACCOUNT_ID=$(AWS_ACCOUNT_ID)"
+	@echo "  ECR_REGISTRY=$(ECR_REGISTRY)"
+	@echo "  IMAGE_TAG=$(IMAGE_TAG)"
+	@echo "  DEPLOY_TARGET=$(DEPLOY_TARGET)"
 	@echo ""
 	@echo "Certificates:"
 	@echo "  certs                  - Generate all certificates (K8s + Docker)"
@@ -340,3 +382,275 @@ keycloak-client-update:
 	fi
 	@echo "✅ Client update completed"
 
+# =============================================================================
+# AWS Production Deployment
+# =============================================================================
+
+aws-login:
+	@echo "🔐 Logging into AWS ECR..."
+	@if [ -z "$(AWS_ACCOUNT_ID)" ]; then \
+		echo "❌ AWS_ACCOUNT_ID is not set. Make sure AWS CLI is configured."; \
+		exit 1; \
+	fi
+	@aws ecr get-login-password --region $(AWS_REGION) | \
+		docker login --username AWS --password-stdin $(ECR_REGISTRY)
+	@echo "✅ Logged in to ECR: $(ECR_REGISTRY)"
+
+aws-ecr-push: aws-login
+	@echo "🐳 Building and pushing images to ECR..."
+	@echo ""
+	@echo "📦 Building backend image..."
+	docker build -t $(ECR_REPO_BACKEND):$(IMAGE_TAG) \
+		-t $(ECR_REPO_BACKEND):latest \
+		-f infra/docker/backend.Dockerfile backend/
+	@echo "📤 Tagging and pushing backend..."
+	docker tag $(ECR_REPO_BACKEND):$(IMAGE_TAG) $(ECR_REGISTRY)/$(ECR_REPO_BACKEND):$(IMAGE_TAG)
+	docker tag $(ECR_REPO_BACKEND):latest $(ECR_REGISTRY)/$(ECR_REPO_BACKEND):latest
+	docker push $(ECR_REGISTRY)/$(ECR_REPO_BACKEND):$(IMAGE_TAG)
+	docker push $(ECR_REGISTRY)/$(ECR_REPO_BACKEND):latest
+	@echo ""
+	@echo "📦 Building frontend image..."
+	docker build -t $(ECR_REPO_FRONTEND):$(IMAGE_TAG) \
+		-t $(ECR_REPO_FRONTEND):latest \
+		-f infra/docker/frontend.Dockerfile frontend/ \
+		--build-arg VITE_API_URL="" \
+		--build-arg VITE_AUTH_ENABLED=true \
+		--build-arg VITE_OIDC_AUTHORITY="https://keycloak.yourdomain.com/realms/testrealm" \
+		--build-arg VITE_OIDC_CLIENT_ID="frontend-client" \
+		--build-arg VITE_OIDC_REDIRECT_URI="https://app.yourdomain.com/callback"
+	@echo "📤 Tagging and pushing frontend..."
+	docker tag $(ECR_REPO_FRONTEND):$(IMAGE_TAG) $(ECR_REGISTRY)/$(ECR_REPO_FRONTEND):$(IMAGE_TAG)
+	docker tag $(ECR_REPO_FRONTEND):latest $(ECR_REGISTRY)/$(ECR_REPO_FRONTEND):latest
+	docker push $(ECR_REGISTRY)/$(ECR_REPO_FRONTEND):$(IMAGE_TAG)
+	docker push $(ECR_REGISTRY)/$(ECR_REPO_FRONTEND):latest
+	@echo ""
+	@echo "✅ Images pushed to ECR"
+	@echo "   Backend:  $(ECR_REGISTRY)/$(ECR_REPO_BACKEND):$(IMAGE_TAG)"
+	@echo "   Frontend: $(ECR_REGISTRY)/$(ECR_REPO_FRONTEND):$(IMAGE_TAG)"
+
+aws-eks-deploy: aws-ecr-push
+	@echo "☸️  Deploying to EKS cluster: $(EKS_CLUSTER_NAME)"
+	@echo ""
+	@echo "📝 Updating kubeconfig..."
+	@aws eks update-kubeconfig --region $(AWS_REGION) --name $(EKS_CLUSTER_NAME)
+	@echo ""
+	@echo "📦 Creating namespace..."
+	@kubectl create namespace $(EKS_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	@echo ""
+	@echo "🔐 Creating secrets..."
+	@kubectl create secret docker-registry ecr-registry \
+		--docker-server=$(ECR_REGISTRY) \
+		--docker-username=AWS \
+		--docker-password=$$(aws ecr get-login-password --region $(AWS_REGION)) \
+		-n $(EKS_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	@echo ""
+	@echo "📝 Applying Kubernetes manifests..."
+	@kubectl apply -f infra/kubernetes/namespace.yaml
+	@kubectl apply -f infra/kubernetes/secrets.yaml
+	@kubectl apply -f infra/kubernetes/configmap.yaml
+	@echo ""
+	@echo "🔄 Updating image tags in deployments..."
+	@kubectl set image deployment/backend backend=$(ECR_REGISTRY)/$(ECR_REPO_BACKEND):$(IMAGE_TAG) -n $(EKS_NAMESPACE) || \
+		(kubectl apply -f infra/kubernetes/backend.yaml && \
+		 kubectl set image deployment/backend backend=$(ECR_REGISTRY)/$(ECR_REPO_BACKEND):$(IMAGE_TAG) -n $(EKS_NAMESPACE))
+	@kubectl set image deployment/frontend frontend=$(ECR_REGISTRY)/$(ECR_REPO_FRONTEND):$(IMAGE_TAG) -n $(EKS_NAMESPACE) || \
+		(kubectl apply -f infra/kubernetes/frontend.yaml && \
+		 kubectl set image deployment/frontend frontend=$(ECR_REGISTRY)/$(ECR_REPO_FRONTEND):$(IMAGE_TAG) -n $(EKS_NAMESPACE))
+	@kubectl apply -f infra/kubernetes/keycloak.yaml
+	@kubectl apply -f infra/kubernetes/ingress.yaml
+	@echo ""
+	@echo "⏳ Waiting for rollout to complete..."
+	@kubectl rollout status deployment/backend -n $(EKS_NAMESPACE) --timeout=300s || true
+	@kubectl rollout status deployment/frontend -n $(EKS_NAMESPACE) --timeout=300s || true
+	@kubectl rollout status deployment/keycloak -n $(EKS_NAMESPACE) --timeout=300s || true
+	@echo ""
+	@echo "✅ EKS deployment completed!"
+	@echo "=============================================="
+	@$(MAKE) aws-eks-status
+
+aws-eks-status:
+	@echo "📊 EKS Deployment Status - $(EKS_CLUSTER_NAME)/$(EKS_NAMESPACE)"
+	@echo "=============================================="
+	@echo ""
+	@echo "📦 Pods:"
+	@kubectl get pods -n $(EKS_NAMESPACE) -o wide || echo "No pods found"
+	@echo ""
+	@echo "🔧 Services:"
+	@kubectl get services -n $(EKS_NAMESPACE) || echo "No services found"
+	@echo ""
+	@echo "🌐 Ingress:"
+	@kubectl get ingress -n $(EKS_NAMESPACE) || echo "No ingress found"
+	@echo ""
+	@echo "🚀 Deployments:"
+	@kubectl get deployments -n $(EKS_NAMESPACE) || echo "No deployments found"
+	@echo ""
+	@INGRESS_URL=$$(kubectl get ingress -n $(EKS_NAMESPACE) -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null); \
+	if [ -n "$$INGRESS_URL" ]; then \
+		echo "🌐 Application URL: https://$$INGRESS_URL"; \
+	fi
+
+aws-eks-clean:
+	@echo "🧹 Cleaning up EKS resources..."
+	@read -p "Are you sure you want to delete all resources in $(EKS_NAMESPACE)? Type 'yes' to confirm: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		aws eks update-kubeconfig --region $(AWS_REGION) --name $(EKS_CLUSTER_NAME); \
+		kubectl delete namespace $(EKS_NAMESPACE) --ignore-not-found=true; \
+		echo "✅ EKS cleanup completed"; \
+	else \
+		echo "❌ Cleanup cancelled"; \
+	fi
+
+aws-ecs-deploy: aws-ecr-push
+	@echo "🐳 Deploying to ECS Fargate: $(ECS_CLUSTER_NAME)"
+	@echo ""
+	@echo "📝 Registering backend task definition..."
+	@aws ecs register-task-definition \
+		--family $(ECS_TASK_FAMILY_BACKEND) \
+		--network-mode awsvpc \
+		--requires-compatibilities FARGATE \
+		--cpu 256 \
+		--memory 512 \
+		--execution-role-arn arn:aws:iam::$(AWS_ACCOUNT_ID):role/ecsTaskExecutionRole \
+		--container-definitions '[{ \
+			"name": "backend", \
+			"image": "$(ECR_REGISTRY)/$(ECR_REPO_BACKEND):$(IMAGE_TAG)", \
+			"essential": true, \
+			"portMappings": [{"containerPort": 8080, "protocol": "tcp"}], \
+			"environment": [ \
+				{"name": "ENVIRONMENT", "value": "production"}, \
+				{"name": "SERVER_HOST", "value": "0.0.0.0"}, \
+				{"name": "SERVER_PORT", "value": "8080"}, \
+				{"name": "RUST_LOG", "value": "info"} \
+			], \
+			"logConfiguration": { \
+				"logDriver": "awslogs", \
+				"options": { \
+					"awslogs-group": "/ecs/$(ECS_TASK_FAMILY_BACKEND)", \
+					"awslogs-region": "$(AWS_REGION)", \
+					"awslogs-stream-prefix": "ecs" \
+				} \
+			} \
+		}]' > /dev/null
+	@echo ""
+	@echo "📝 Registering frontend task definition..."
+	@aws ecs register-task-definition \
+		--family $(ECS_TASK_FAMILY_FRONTEND) \
+		--network-mode awsvpc \
+		--requires-compatibilities FARGATE \
+		--cpu 256 \
+		--memory 512 \
+		--execution-role-arn arn:aws:iam::$(AWS_ACCOUNT_ID):role/ecsTaskExecutionRole \
+		--container-definitions '[{ \
+			"name": "frontend", \
+			"image": "$(ECR_REGISTRY)/$(ECR_REPO_FRONTEND):$(IMAGE_TAG)", \
+			"essential": true, \
+			"portMappings": [{"containerPort": 443, "protocol": "tcp"}], \
+			"environment": [ \
+				{"name": "ENVIRONMENT", "value": "production"} \
+			], \
+			"logConfiguration": { \
+				"logDriver": "awslogs", \
+				"options": { \
+					"awslogs-group": "/ecs/$(ECS_TASK_FAMILY_FRONTEND)", \
+					"awslogs-region": "$(AWS_REGION)", \
+					"awslogs-stream-prefix": "ecs" \
+				} \
+			} \
+		}]' > /dev/null
+	@echo ""
+	@echo "🔄 Updating backend service..."
+	@aws ecs update-service \
+		--cluster $(ECS_CLUSTER_NAME) \
+		--service $(ECS_SERVICE_BACKEND) \
+		--task-definition $(ECS_TASK_FAMILY_BACKEND) \
+		--force-new-deployment > /dev/null || \
+		echo "⚠️  Service $(ECS_SERVICE_BACKEND) not found. Please create it via AWS Console or Terraform."
+	@echo ""
+	@echo "🔄 Updating frontend service..."
+	@aws ecs update-service \
+		--cluster $(ECS_CLUSTER_NAME) \
+		--service $(ECS_SERVICE_FRONTEND) \
+		--task-definition $(ECS_TASK_FAMILY_FRONTEND) \
+		--force-new-deployment > /dev/null || \
+		echo "⚠️  Service $(ECS_SERVICE_FRONTEND) not found. Please create it via AWS Console or Terraform."
+	@echo ""
+	@echo "✅ ECS deployment initiated!"
+	@echo "=============================================="
+	@$(MAKE) aws-ecs-status
+
+aws-ecs-status:
+	@echo "📊 ECS Deployment Status - $(ECS_CLUSTER_NAME)"
+	@echo "=============================================="
+	@echo ""
+	@echo "🔧 Backend Service:"
+	@aws ecs describe-services \
+		--cluster $(ECS_CLUSTER_NAME) \
+		--services $(ECS_SERVICE_BACKEND) \
+		--query 'services[0].[serviceName,status,runningCount,desiredCount]' \
+		--output table 2>/dev/null || echo "Service not found"
+	@echo ""
+	@echo "🌐 Frontend Service:"
+	@aws ecs describe-services \
+		--cluster $(ECS_CLUSTER_NAME) \
+		--services $(ECS_SERVICE_FRONTEND) \
+		--query 'services[0].[serviceName,status,runningCount,desiredCount]' \
+		--output table 2>/dev/null || echo "Service not found"
+	@echo ""
+	@echo "📦 Recent Task Statuses:"
+	@aws ecs list-tasks --cluster $(ECS_CLUSTER_NAME) --max-items 5 \
+		--query 'taskArns[]' --output text 2>/dev/null | \
+		xargs -I {} aws ecs describe-tasks --cluster $(ECS_CLUSTER_NAME) --tasks {} \
+		--query 'tasks[].[taskArn,lastStatus,healthStatus]' --output table 2>/dev/null || \
+		echo "No tasks found"
+
+aws-ecs-clean:
+	@echo "🧹 Cleaning up ECS resources..."
+	@read -p "Are you sure you want to stop all services in $(ECS_CLUSTER_NAME)? Type 'yes' to confirm: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		echo "🛑 Updating backend service to 0 tasks..."; \
+		aws ecs update-service \
+			--cluster $(ECS_CLUSTER_NAME) \
+			--service $(ECS_SERVICE_BACKEND) \
+			--desired-count 0 > /dev/null 2>&1 || true; \
+		echo "🛑 Updating frontend service to 0 tasks..."; \
+		aws ecs update-service \
+			--cluster $(ECS_CLUSTER_NAME) \
+			--service $(ECS_SERVICE_FRONTEND) \
+			--desired-count 0 > /dev/null 2>&1 || true; \
+		echo "✅ ECS cleanup completed"; \
+	else \
+		echo "❌ Cleanup cancelled"; \
+	fi
+
+# Unified production deployment commands
+prod-deploy:
+	@if [ "$(DEPLOY_TARGET)" = "eks" ]; then \
+		$(MAKE) aws-eks-deploy; \
+	elif [ "$(DEPLOY_TARGET)" = "ecs" ]; then \
+		$(MAKE) aws-ecs-deploy; \
+	else \
+		echo "❌ Invalid DEPLOY_TARGET: $(DEPLOY_TARGET)"; \
+		echo "   Use: make prod-deploy DEPLOY_TARGET=eks"; \
+		echo "   Or:  make prod-deploy DEPLOY_TARGET=ecs"; \
+		exit 1; \
+	fi
+
+prod-status:
+	@if [ "$(DEPLOY_TARGET)" = "eks" ]; then \
+		$(MAKE) aws-eks-status; \
+	elif [ "$(DEPLOY_TARGET)" = "ecs" ]; then \
+		$(MAKE) aws-ecs-status; \
+	else \
+		echo "❌ Invalid DEPLOY_TARGET: $(DEPLOY_TARGET)"; \
+		exit 1; \
+	fi
+
+prod-clean:
+	@if [ "$(DEPLOY_TARGET)" = "eks" ]; then \
+		$(MAKE) aws-eks-clean; \
+	elif [ "$(DEPLOY_TARGET)" = "ecs" ]; then \
+		$(MAKE) aws-ecs-clean; \
+	else \
+		echo "❌ Invalid DEPLOY_TARGET: $(DEPLOY_TARGET)"; \
+		exit 1; \
+	fi
