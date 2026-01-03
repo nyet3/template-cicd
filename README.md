@@ -54,6 +54,32 @@ npm install
 
 - F5 キーを押すとバックエンド(LLDB)とフロントエンド(npm run dev)が同時に起動します
 
+#### CI/CD 事前確認
+
+プッシュ前に CI/CD と同じチェックをローカルで実行できます：
+
+```bash
+# すべてのCI/CDチェックを実行
+make ci-check
+
+# または個別に実行
+make ci-backend   # バックエンドのみ (test + clippy)
+make ci-frontend  # フロントエンドのみ (lint + test + build)
+
+# スクリプトで実行
+./scripts/ci-check.sh
+```
+
+これにより以下がチェックされます：
+
+- ✅ バックエンドのテスト (`cargo test`)
+- ✅ バックエンドの lint (`cargo clippy`)
+- ✅ フロントエンドの lint (`npm run lint`)
+- ✅ フロントエンドのテスト (`npm test`)
+- ✅ フロントエンドのビルド (`npm run build`)
+
+全てのチェックが通れば CI/CD も成功します。
+
 #### 手動起動
 
 ```bash

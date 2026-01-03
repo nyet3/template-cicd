@@ -2,7 +2,7 @@ use crate::config::{Config, Environment};
 use crate::models::AuthInfo;
 use actix_web::error::ErrorUnauthorized;
 use actix_web::http::header::{HeaderMap, HeaderValue};
-use actix_web::{dev::ServiceRequest, Error as ActixError, HttpMessage};
+use actix_web::Error as ActixError;
 use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -129,10 +129,6 @@ impl AuthMiddleware {
         })
     }
 
-    pub async fn extract_auth_info(&self, req: &ServiceRequest) -> Result<AuthInfo, ActixError> {
-        self.extract_from_headers(req.headers()).await
-    }
-
     pub async fn extract_from_request(
         &self,
         req: &actix_web::HttpRequest,
@@ -158,12 +154,4 @@ impl AuthMiddleware {
         let token = &auth_header[7..];
         self.validate_token(token).await
     }
-}
-
-// Helper function to extract auth info from request extensions
-pub fn get_auth_info(req: &actix_web::HttpRequest) -> Result<AuthInfo, ActixError> {
-    req.extensions()
-        .get::<AuthInfo>()
-        .cloned()
-        .ok_or_else(|| ErrorUnauthorized("Authentication required"))
 }

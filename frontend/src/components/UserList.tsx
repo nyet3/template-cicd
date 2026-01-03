@@ -46,7 +46,7 @@ export const UserList = () => {
     } finally {
       setLoading(false);
     }
-  }, [auth, auth?.isLoading, auth?.isAuthenticated, auth?.user?.access_token]);
+  }, [auth]);
 
   useEffect(() => {
     loadUsers();

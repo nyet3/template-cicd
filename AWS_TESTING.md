@@ -37,6 +37,8 @@ sudo apt-get install awscli jq
 
 ### AWS 認証情報の設定
 
+> **注意**: GitHub Actions で AWS デプロイを有効にするには、`AWS_ACCESS_KEY_ID`と`AWS_SECRET_ACCESS_KEY`を GitHub Secrets に設定する必要があります。設定方法は[GITHUB_SECRETS.md](./GITHUB_SECRETS.md)を参照してください。
+
 ```bash
 # AWS CLIの設定
 aws configure

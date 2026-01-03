@@ -41,7 +41,7 @@ export const AuthInfoDisplay: React.FC<AuthInfoDisplayProps> = () => {
         console.error("Failed to fetch auth info:", err);
         setError("認証情報の取得に失敗しました");
       });
-  }, []);
+  }, [auth]);
 
   if (error) {
     return (

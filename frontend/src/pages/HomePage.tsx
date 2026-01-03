@@ -2,6 +2,13 @@ import { useAuth } from "react-oidc-context";
 import { useEffect, useState } from "react";
 import { config } from "../config";
 
+interface UserProfile {
+  name?: string;
+  preferred_username?: string;
+  organization?: string;
+  [key: string]: unknown;
+}
+
 export const HomePage = () => {
   const auth = useAuth();
   const [showProfileOverlay, setShowProfileOverlay] = useState(false);
@@ -155,7 +162,7 @@ export const HomePage = () => {
                       </strong>
                       <div style={{ color: "#333", marginTop: "0.25rem" }}>
                         {userProfile?.name ||
-                          (userProfile as any)?.preferred_username ||
+                          (userProfile as UserProfile)?.preferred_username ||
                           "N/A"}
                       </div>
                     </div>
@@ -164,7 +171,7 @@ export const HomePage = () => {
                         所属:
                       </strong>
                       <div style={{ color: "#333", marginTop: "0.25rem" }}>
-                        {(userProfile as any)?.organization || "未設定"}
+                        {(userProfile as UserProfile)?.organization || "未設定"}
                       </div>
                     </div>
                     <div

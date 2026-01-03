@@ -65,6 +65,42 @@ npm run dev
 - バックエンド API: http://localhost:8080/health
 - 認証情報: 開発環境ではダミー認証が有効
 
+## CI/CD 事前チェック
+
+コードをプッシュする前に、GitHub Actions CI/CD と同じチェックをローカルで実行できます。
+
+### すべてのチェックを実行
+
+```bash
+make ci-check
+```
+
+または
+
+```bash
+./scripts/ci-check.sh
+```
+
+### 個別チェック
+
+```bash
+# バックエンドのみ (テスト + Clippy)
+make ci-backend
+
+# フロントエンドのみ (Lint + テスト + ビルド)
+make ci-frontend
+```
+
+### チェック内容
+
+- ✅ **Backend Tests**: `cargo test --verbose`
+- ✅ **Backend Clippy**: `cargo clippy -- -D warnings`
+- ✅ **Frontend Lint**: `npm run lint`
+- ✅ **Frontend Tests**: `npm test -- --run`
+- ✅ **Frontend Build**: `npm run build`
+
+すべてのチェックが通れば、CI/CD も成功します。
+
 ## Docker 環境でのセットアップ（推奨）
 
 ### 1. 証明書の生成

@@ -1,4 +1,4 @@
-.PHONY: help dev test build clean docker-build docker-test k8s-deploy k8s-clean k8s-port-forward k8s-stop-port-forward k8s-status k8s-create-secrets certs certs-k8s certs-docker certs-clean keycloak-setup keycloak-setup-docker keycloak-setup-k8s keycloak-logs keycloak-reset keycloak-client-update aws-login aws-ecr-push aws-eks-deploy aws-eks-status aws-eks-clean aws-ecs-deploy aws-ecs-status aws-ecs-clean prod-deploy prod-status prod-clean multi-region-init multi-region-plan multi-region-apply multi-region-status multi-region-destroy
+.PHONY: help dev test build clean docker-build docker-test k8s-deploy k8s-clean k8s-port-forward k8s-stop-port-forward k8s-status k8s-create-secrets certs certs-k8s certs-docker certs-clean keycloak-setup keycloak-setup-docker keycloak-setup-k8s keycloak-logs keycloak-reset keycloak-client-update aws-login aws-ecr-push aws-eks-deploy aws-eks-status aws-eks-clean aws-ecs-deploy aws-ecs-status aws-ecs-clean prod-deploy prod-status prod-clean multi-region-init multi-region-plan multi-region-apply multi-region-status multi-region-destroy ci-check ci-backend ci-frontend
 
 # AWS Configuration
 AWS_REGION_PRIMARY ?= ap-northeast-1
@@ -41,6 +41,11 @@ help:
 	@echo "  test                   - Run all tests"
 	@echo "  build                  - Build all components"
 	@echo "  clean                  - Clean build artifacts"
+	@echo ""
+	@echo "CI/CD Verification:"
+	@echo "  ci-check               - Run all CI checks locally (backend + frontend)"
+	@echo "  ci-backend             - Run backend CI checks (test + clippy)"
+	@echo "  ci-frontend            - Run frontend CI checks (lint + test + build)"
 	@echo ""
 	@echo "Docker Compose (Staging):"
 	@echo "  docker-build           - Build Docker images"
@@ -111,6 +116,30 @@ build:
 	cd backend && cargo build --release
 	@echo "Building frontend..."
 	cd frontend && npm run build
+
+# CI/CD Verification targets
+ci-check: ci-backend ci-frontend
+	@echo "✅ All CI checks passed!"
+
+ci-backend:
+	@echo "🦀 Running backend CI checks..."
+	@echo "  → Running tests..."
+	cd backend && cargo test --verbose
+	@echo "  → Running clippy..."
+	cd backend && cargo clippy -- -D warnings
+	@echo "✅ Backend CI checks passed!"
+
+ci-frontend:
+	@echo "⚛️  Running frontend CI checks..."
+	@echo "  → Installing dependencies..."
+	cd frontend && npm ci
+	@echo "  → Running linter..."
+	cd frontend && npm run lint
+	@echo "  → Running tests..."
+	cd frontend && npm test -- --run
+	@echo "  → Building..."
+	cd frontend && npm run build
+	@echo "✅ Frontend CI checks passed!"
 
 clean:
 	@echo "Cleaning..."

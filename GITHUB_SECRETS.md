@@ -2,6 +2,8 @@
 
 GitHub Actions CI/CD を使用するために、以下のシークレットを設定してください。
 
+> **注意**: これらのシークレットが設定されていない場合、デプロイ関連のジョブは自動的にスキップされます。CI（テスト、ビルド、Lint）のみが実行されます。
+
 ## 必須シークレット (Multi-Region Production)
 
 ### AWS 認証情報
@@ -57,6 +59,16 @@ CI/CD ユーザーには以下の権限が必要です：
 ```
 
 ## シークレットの設定方法
+
+### シークレット未設定時の動作
+
+GitHub Secrets が設定されていない場合：
+
+- **CI ワークフロー** (`ci.yml`): 正常に実行されます（テスト、Lint、ビルド）
+- **CD ワークフロー** (`cd-staging.yml`, `cd-production.yml`): ビルド・デプロイジョブがスキップされます
+- **Multi-Region Deployment** (`deploy-multi-region.yml`): AWS 関連ジョブがスキップされます
+
+これにより、Secrets が未設定でも CI/CD パイプラインがエラーにならず、開発を継続できます。
 
 ### GitHub UI から設定
 
